@@ -18,7 +18,7 @@ cd Proyecto/
 
 # Construir y levantar los contenedores
 docker compose up --build
-
+```
 
 
 El proyecto está organizado en dos módulos principales: backend y frontend, además de archivos de configuración raíz.
