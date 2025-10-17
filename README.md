@@ -15,4 +15,4 @@ Puede acceder a la Wiki dando click en el siguiente enlace: [Disponible aquí](h
 
 ## Avances del Hito en el TAG:
 
-Avances disponibles en el tag correspondiente: [TAG 2](https://github.com/Joaquinn0101/GRUPOSEGFAULT-2025-PROYINF/releases/tag/hito-2)
+Avances disponibles en el tag correspondiente: [TAG 3](https://github.com/Joaquinn0101/GRUPO06-2025-PROYINF/releases/tag/hito-3)
