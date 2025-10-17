@@ -32,7 +32,9 @@ cd Proyecto/
 # Construir y levantar los contenedores
 docker compose up --build
 Esto descargará la rama dev del repositorio, accederá al directorio del proyecto y levantará el entorno completo mediante Docker Compose.
+```
 
+```bash
 🧱 Estructura del proyecto
 El proyecto está organizado en dos módulos principales: backend y frontend, además de archivos de configuración en la raíz del repositorio.
 
@@ -56,3 +58,4 @@ Proyecto/
 │
 ├── docker-compose.yml       # 🔧 Orquestador de contenedores (backend + frontend)
 └── readme.md                # 📝 Documentación del proyecto
+```
