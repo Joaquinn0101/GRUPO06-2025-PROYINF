@@ -1,244 +1,152 @@
+// backend/loans.routes.js
 const express = require("express");
-const pool = require("./db");
 const { z } = require("zod");
+const pool = require("./db");
+
+// Lógica de negocio
+const { calcularScoring } = require("./scoring"); // usa calculadora.js internamente
+const { validarRut, validarTelefonoChileno } = require("./validaciones");
 
 const router = express.Router();
 
-<<<<<<< HEAD
-// Crea la tabla si no existe
+/* =============== Utilidades locales =============== */
+function normalizarTelefonoCL(input = "") {
+    if (!input) return "";
+    const raw = String(input).trim().replace(/\s+/g, "");
+    let digits = raw.replace(/^\+/, "");
+    if (digits.startsWith("569")) {
+        // ok
+    } else if (digits.startsWith("9")) {
+        digits = "569" + digits;
+    }
+    if (!/^\d+$/.test(digits)) return input;
+    const rest = digits.slice(3);
+    if (!digits.startsWith("569") || rest.length !== 8) return input;
+    return `+569${rest}`; // canónico sin espacio
+}
+
+/* =============== Esquema de validación request =============== */
+const ApplySchema = z.object({
+    rut: z.string().min(3).refine((v) => validarRut(v), { message: "RUT inválido" }),
+    full_name: z.string().min(3, "Nombre requerido"),
+    email: z.string().email("Email inválido"),
+    phone: z
+        .string()
+        .optional()
+        .transform((v) => (v ? normalizarTelefonoCL(v) : v))
+        .refine((v) => (v ? validarTelefonoChileno(v) : true), {
+            message: "Teléfono inválido. Usa +569 12345678",
+        }),
+    amount: z.number().int().positive("Monto > 0"),
+    term_months: z.number().int().positive("Plazo > 0"),
+    income: z.number().int().nonnegative().optional(),
+});
+
+/* =============== DDL: asegurar tabla =============== */
 async function ensureTables() {
     await pool.query(`
         CREATE TABLE IF NOT EXISTS loan_requests (
                                                      id SERIAL PRIMARY KEY,
-                                                     rut VARCHAR(12) NOT NULL,
-            full_name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            amount NUMERIC(14,2) NOT NULL CHECK (amount > 0),
-            term_months INT NOT NULL CHECK (term_months > 0),
-            income NUMERIC(14,2),
-            status VARCHAR(20) NOT NULL DEFAULT 'pendiente', -- pendiente|inadmisible|rechazada|aprobada
-            scoring INT,
-            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                                                     rut TEXT NOT NULL,
+                                                     full_name TEXT NOT NULL,
+                                                     email TEXT NOT NULL,
+                                                     phone TEXT,
+                                                     amount INTEGER NOT NULL,
+                                                     term_months INTEGER NOT NULL,
+                                                     income INTEGER,
+                                                     status TEXT NOT NULL DEFAULT 'pendiente',
+                                                     scoring INTEGER,
+                                                     created_at TIMESTAMP NOT NULL DEFAULT NOW()
             );
-=======
-// --- IMPORTACIÓN DE MÓDULOS DE LÓGICA ---
-// Asegúrate de que los archivos existan en la misma carpeta.
-const { obtenerTasaMock, calcularCuotaMensual } = require('./calculadora');
-const { calcularScoring } = require('./scoring');
-const { validarRut, validarTelefonoChileno } = require('./validaciones');
-// -------------------------------------------------------------------
-
-
-// Crea la tabla si no existe (CORRECCIÓN CRÍTICA DE SQL)
-async function ensureTables() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS loan_requests (
-            id SERIAL PRIMARY KEY,
-            rut VARCHAR(12) NOT NULL,
-            full_name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            phone TEXT,             /* <- Columna PHONE agregada con tipo TEXT */
-            amount NUMERIC(14,2) NOT NULL CHECK (amount > 0),
-            term_months INT NOT NULL CHECK (term_months > 0),
-            income NUMERIC(14,2),
-            status VARCHAR(20) NOT NULL DEFAULT 'pendiente', 
-            scoring INT,
-            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-        );
->>>>>>> 2f67d2c (Versión inicial con validación de teléfono y RUT)
-        CREATE INDEX IF NOT EXISTS idx_loan_requests_status ON loan_requests(status);
     `);
+
+    // Columna phone por si viene de antes sin ella
+    await pool.query(`ALTER TABLE loan_requests ADD COLUMN IF NOT EXISTS phone TEXT;`);
+
+    // Constraint (PG15 no soporta IF NOT EXISTS en constraints; ignoramos si ya existe)
+    try {
+        await pool.query(`
+            ALTER TABLE loan_requests
+                ADD CONSTRAINT chk_phone_cl
+                    CHECK (phone IS NULL OR phone ~ '^\\+?569 ?[0-9]{8}$');
+        `);
+    } catch (_) { /* ya existe */ }
 }
 
-<<<<<<< HEAD
-// Validación del payload (el front ya manda números)
-const ApplySchema = z.object({
-    rut: z.string().min(3),
-    full_name: z.string().min(3),
-    email: z.string().email(),
-=======
-// -------------------------------------------------------------------
-// --- ESQUEMAS DE VALIDACIÓN ZOD ---
+/* =============== Rutas bajo /loans =============== */
 
-const ApplySchema = z.object({
-    rut: z.string().min(3)
-        .refine(validarRut, { message: "El RUT ingresado no es válido." }),
+// Salud del router
+router.get("/health", (_req, res) => res.json({ ok: true, scope: "loans" }));
 
-    full_name: z.string().min(3),
-    email: z.string().email(),
-
-    // El campo 'phone' es opcional y se valida solo si está presente.
-    phone: z.string().optional()
-        .refine((val) => !val || validarTelefonoChileno(val), { message: "El formato de teléfono debe ser chileno (+569xxxxxxxx)." }),
-
->>>>>>> 2f67d2c (Versión inicial con validación de teléfono y RUT)
-    amount: z.number().positive(),
-    term_months: z.number().int().positive(),
-    income: z.number().positive().optional()
-});
-
-<<<<<<< HEAD
-// Reglas mock: admisibilidad + score
-function isAdmissible({ income = 0, amount }) {
-    if (!income) return false;
-    return amount <= income * 20;
-}
-
-function computeScore({ income = 0, amount, term_months }) {
-    const term = term_months || 24;
-    const base = 60 + income / (amount / term);
-    const s = Math.round(Math.max(1, Math.min(100, base))); // [1,100]
-    return s;
-}
-
-// POST /loans/apply
+// POST /loans/apply → inserta, calcula scoring y devuelve {id,status,scoring}
 router.post("/apply", async (req, res) => {
     try {
         await ensureTables();
 
-        const parsed = ApplySchema.safeParse(req.body);
-=======
-const SimulateSchema = z.object({
-    amount: z.number().positive(),
-    term_months: z.number().int().positive()
-});
-// -------------------------------------------------------------------
-
-
-// POST /loans/simular (RUTA HU 2 - Simulación)
-router.post("/simular", async (req, res) => {
-    try {
-        const parsed = SimulateSchema.safeParse(req.body);
-
-        if (!parsed.success) {
-            return res.status(400).json({ error: "invalid_simulation_payload", details: parsed.error.flatten() });
-        }
-
-        const payload = parsed.data;
-        const TASA_ANUAL_APLICADA = obtenerTasaMock(payload.term_months);
-
-        const cuotaMensual = calcularCuotaMensual(
-            payload.amount,
-            TASA_ANUAL_APLICADA,
-            payload.term_months
-        );
-
-        const ctc = cuotaMensual * payload.term_months;
-
-        return res.json({
-            cuota_mensual: cuotaMensual,
-            costo_total_credito: ctc,
-            tasa_anual_aplicada: TASA_ANUAL_APLICADA
+        // 1) Validar body
+        const parsed = ApplySchema.parse({
+            rut: req.body?.rut,
+            full_name: req.body?.full_name,
+            email: req.body?.email,
+            phone: req.body?.phone,
+            amount: Number(req.body?.amount),
+            term_months: Number(req.body?.term_months),
+            income: req.body?.income == null ? undefined : Number(req.body?.income),
         });
 
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ error: "internal_error" });
-    }
-});
+        const { rut, full_name, email, phone, amount, term_months, income } = parsed;
 
+        // 2) Insertar como pendiente
+        const insertQ = `
+            INSERT INTO loan_requests (rut, full_name, email, phone, amount, term_months, income, status)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,'pendiente')
+                RETURNING *;
+        `;
+        const { rows: insertedRows } = await pool.query(insertQ, [
+            rut, full_name, email, phone ?? null, amount, term_months, income ?? null,
+        ]);
+        const reqRow = insertedRows[0];
 
-// POST /loans/apply (RUTA HU 1 - Solicitud)
-router.post("/apply", async (req, res) => {
-    try {
-        await ensureTables(); // Aseguramos que la tabla exista
+        // 3) Calcular scoring inmediato (usa scoring.js)
+        const ingreso = income ?? 0;
+        const score = calcularScoring(ingreso, amount, term_months); // entero [1..100]
 
-        const parsed = ApplySchema.safeParse(req.body);
+        // 4) Reglas de decisión (mock): >= 60 aprueba, < 60 rechaza
+        const finalStatus = score >= 60 ? "aprobada" : "rechazada";
 
->>>>>>> 2f67d2c (Versión inicial con validación de teléfono y RUT)
-        if (!parsed.success) {
-            return res.status(400).json({ error: "invalid_payload", details: parsed.error.flatten() });
-        }
-        const payload = parsed.data;
+        // 5) Persistir status + scoring
+        const updateQ = `
+            UPDATE loan_requests
+            SET status = $2, scoring = $3
+            WHERE id = $1
+                RETURNING id, status, scoring;
+        `;
+        const { rows: updatedRows } = await pool.query(updateQ, [reqRow.id, finalStatus, score]);
 
-<<<<<<< HEAD
-        // Registrar solicitud en estado pendiente
-        const { rows } = await pool.query(
-            `INSERT INTO loan_requests (rut, full_name, email, amount, term_months, income, status)
-             VALUES ($1,$2,$3,$4,$5,$6,'pendiente') RETURNING *`,
-            [payload.rut, payload.full_name, payload.email, payload.amount, payload.term_months, payload.income ?? null]
-        );
-        const reqRow = rows[0];
-
-        // Decisión: admisibilidad + scoring
-        let status = "inadmisible";
-        let scoring = null;
-
-        if (isAdmissible(payload)) {
-            scoring = computeScore(payload);
-            status = scoring >= 55 ? "aprobada" : "rechazada";
-        }
-
-        // Guardar resultado
-=======
-        // CORRECCIÓN CRÍTICA DE SQL: Preparamos los parámetros, incluyendo 'phone'
-        const phoneToInsert = payload.phone ?? null;
-        const incomeToInsert = payload.income ?? null;
-
-        // 1. Registrar solicitud en estado pendiente
-        // ¡Se agregaron las columnas 'phone' y el parámetro $4!
-        const { rows } = await pool.query(
-            `INSERT INTO loan_requests (rut, full_name, email, phone, amount, term_months, income, status)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,'pendiente') RETURNING *`,
-            [payload.rut, payload.full_name, payload.email, phoneToInsert, payload.amount, payload.term_months, incomeToInsert]
-        );
-        const reqRow = rows[0];
-
-        // 2. Lógica de Scoring Automático
-        let status = "inadmisible";
-        let scoring = null;
-
-        if (payload.income && payload.income > 0) {
-            scoring = calcularScoring(
-                payload.income,
-                payload.amount,
-                payload.term_months
-            );
-
-            // Decisión automática
-            status = scoring >= 55 ? "aprobada" : "rechazada";
-        }
-
-        // 3. Guardar resultado
->>>>>>> 2f67d2c (Versión inicial con validación de teléfono y RUT)
-        const { rows: updated } = await pool.query(
-            `UPDATE loan_requests
-             SET status=$1, scoring=$2, updated_at=NOW()
-             WHERE id=$3
-                 RETURNING id, status, scoring, updated_at`,
-            [status, scoring, reqRow.id]
-        );
-
+        // 6) Responder lo que tu frontend espera
         return res.status(201).json({
-            id: reqRow.id,
-            status: updated[0].status,
-            scoring: updated[0].scoring
+            id: updatedRows[0].id,
+            status: updatedRows[0].status,
+            scoring: updatedRows[0].scoring,
         });
-    } catch (e) {
-<<<<<<< HEAD
-        console.error(e);
-=======
-        console.error(e); // Deja el log para ver el error real si persiste
->>>>>>> 2f67d2c (Versión inicial con validación de teléfono y RUT)
-        res.status(500).json({ error: "internal_error" });
+    } catch (err) {
+        if (err?.issues) {
+            return res.status(400).json({ error: "validation_error", issues: err.issues });
+        }
+        console.error(err);
+        return res.status(500).json({ error: "apply_failed" });
     }
 });
 
-<<<<<<< HEAD
-// GET /loans/:id/status
+// GET /loans/:id/status → consulta rápida para polling si lo usas
 router.get("/:id/status", async (req, res) => {
     try {
-        await ensureTables();
         const { rows } = await pool.query(
-            `SELECT id, status, scoring, updated_at
-             FROM loan_requests
-             WHERE id = $1`,
-            [req.params.id]
+            `SELECT id, status, scoring FROM loan_requests WHERE id = $1`,
+            [Number(req.params.id)]
         );
         if (!rows.length) return res.status(404).json({ error: "not_found" });
-        return res.json(rows[0]);
+        res.json(rows[0]);
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: "internal_error" });
@@ -246,9 +154,3 @@ router.get("/:id/status", async (req, res) => {
 });
 
 module.exports = router;
-=======
-
-// ... (Tu ruta GET /loans/:id/status debe seguir aquí)
-
-module.exports = router;
->>>>>>> 2f67d2c (Versión inicial con validación de teléfono y RUT)

@@ -2,29 +2,30 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const pool = require("./db");
-const loans = require("./loans.routes");
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Middlewares base
 app.use(express.json());
-
-// CORS para Vite dev y preview
 app.use(cors({
     origin: [
         "http://localhost:5173", // Vite dev
-        "http://localhost:4173"  // vite preview
-    ]
+        "http://localhost:4173", // Vite preview
+    ],
 }));
 
-// Healthcheck (útil para verificar DB)
-app.get("/health", async (_req, res) => {
-    try { await pool.query("SELECT 1"); res.send("ok"); }
-    catch { res.status(500).send("db-down"); }
+// Logger simple
+app.use((req, _res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+    next();
 });
 
-// Rutas de negocio
-app.use("/loans", loans);
+// Healthcheck simple del servidor/app (sin DB)
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+// Rutas de negocio bajo /loans
+app.use("/loans", require("./loans.routes"));
 
 // 404 + error handler
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));
@@ -33,6 +34,11 @@ app.use((err, _req, res, _next) => {
     res.status(500).json({ error: "internal_error" });
 });
 
+// Para diagnosticar crashes inesperados
+process.on("unhandledRejection", (r) => console.error("UNHANDLED REJECTION", r));
+process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION", e));
+
+// ⬇️ IMPORTANTE: esto faltaba y por eso el contenedor salía con code 0
 app.listen(port, () => {
     console.log(`Backend listening on http://localhost:${port}`);
 });
