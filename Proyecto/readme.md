@@ -73,7 +73,7 @@ La API del Backend (backend/loans.routes.js) implementa la siguiente funcionalid
 
 # Estructura del proyecto
 El proyecto está organizado en dos módulos principales: backend y frontend, además de archivos de configuración en la raíz del repositorio.
-
+```
 Proyecto/
 ├── backend/                 # ⚙️ Lógica del servidor (API REST, conexión a la BD, rutas)
 │   ├── Dockerfile           # 🐳 Imagen Docker del backend
