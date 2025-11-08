@@ -1,25 +1,11 @@
 # Proyecto GRUPO06-2025-PROYINF
 
-Este proyecto implementa un sistema de evaluación de riesgos para solicitudes de préstamos de consumo. Está diseñado como una aplicación Full Stack. Está dividido en dos partes principales:  
-* **Backend (API REST):** Construido con **Node.js** y **Express**, responsable de la lógica de negocio (scoring, cálculo) y la persistencia de datos en una base de datos **PostgreSQL**.
-* **Frontend (Aplicación Web):** Desarrollado con **React** y **Vite**, proporcionando la interfaz de usuario para que los clientes simulen y formalicen sus solicitudes.
-
+Este proyecto está dividido en dos partes principales: un **backend** (API REST con Node.js) y un **frontend** (interfaz web con Vite + React).  
 Ambos servicios se orquestan mediante **Docker Compose** para facilitar la ejecución y el despliegue.
 
 ---
-## Tecnologías Principales (Stack)
 
-Hemos utilizado las siguientes tecnologías, con la Base de Datos y el Backend configurados para comunicarse mediante las variables de entorno definidas en el `docker-compose.yml`.
-
-| Componente | Tecnología | Propósito | Archivos Clave |
-| :--- | :--- | :--- | :--- |
-| **Backend** | Node.js, Express, **Zod** | Servidor API y validación de esquemas. | `package.json`, `index.js` |
-| **Database** | **PostgreSQL** (Docker) | Persistencia de solicitudes de préstamo. | `db.js`, `docker-compose.yml` |
-| **Frontend** | React, Vite, **Tailwind** | Interfaz de Usuario. | `LoanRequestView.jsx`, `vite.config.js` |
-| **Validación** | Lógica Chilena | Validación de RUT y números de teléfono. | `validaciones.js` |
-
----
-## Requisitos Previos
+## Requisitos previos
 
 Antes de ejecutar el proyecto, asegúrate de tener instaladas las siguientes herramientas:
 
@@ -33,64 +19,80 @@ Puedes verificar las versiones con:
 git --version
 docker --version
 docker compose version
+💻 Ejecución del proyecto
+Para ejecutar el código base, basta con escribir los siguientes comandos en una terminal:
 
-```
-# Ejecución del proyecto
-Para ejecutar el código base, utiliza los siguientes comandos:
-```bash
-# 1. Clonar el repositorio (rama dev)
-git clone --branch dev --single-branch [https://github.com/Joaquinn0101/GRUPO06-2025-PROYINF.git](https://github.com/Joaquinn0101/GRUPO06-2025-PROYINF.git)
+Copiar código
+# Clonar el repositorio (rama dev)
+git clone --branch dev --single-branch https://github.com/Joaquinn0101/GRUPO06-2025-PROYINF.git
 
-# 2. Acceder a la carpeta del proyecto
+# Acceder a la carpeta del proyecto
 cd Proyecto/
 
-# 3. Construir las imágenes y levantar los contenedores
+# Construir y levantar los contenedores
 docker compose up --build -d
-```
 Esto descargará la rama dev del repositorio, accederá al directorio del proyecto y levantará el entorno completo mediante Docker Compose.
 
-# Acceso a la Aplicación
-Una vez levantados los contenedores, puedes acceder a los servicios en las siguientes URLs:
-* Frontend (Aplicación Web): http://localhost:5173
-* Backend (API Base): http://localhost:3000
-# Avances del Hito 4
-Esta sección aborda el incremento de código y la gestión del repositorio para el Hito 4, conforme a los requisitos de la pauta.
-1. Nueva Historia de Usuario (HU)
-2. El estado de las tareas (identificadas y nuevas) se encuentra actualizado
-3. Avances Clave
+#Otra opcion 
+Se puede descargar directamente el .zip del proyecto en el github y ejecutar el comando para levantar los contenedores desde ahi
+docker compose up --build -d
+```
 
-# Documentación de Servicios (API REST)
-La API del Backend (backend/loans.routes.js) implementa la siguiente funcionalidad. Esta sección documenta la forma en que se utiliza la API en el contexto del escenario relevante.
+## Servicios
+Una vez levantado, el proyecto expone los siguientes servicios:
 
-| Endpoint | Verbo HTTP | Propósito | Módulos de Lógica Involucrados |
-| :--- | :--- | :--- | :--- |
-| `/loans/v1/apply` | `POST` | **Procesa la solicitud de préstamo.** Recibe datos del cliente, calcula el *Scoring* (elegibilidad) y registra la solicitud en la base de datos con un estado inicial. | `scoring.js`, `calculadora.js`, `db.js` |
-| `/loans/:id/status` | `GET` | **Consulta el estado de una solicitud.** Permite obtener el estado actual y el *Scoring* final de un préstamo por su ID. | `db.js` |
-| `/health` | `GET` | **Chequeo de salud del servidor.** Un diagnóstico simple para confirmar que el servidor está activo. | `index.js` |
+* Frontend (Cliente): http://localhost:5173
 
-> **Detalles para la Revisión:** Se recuerda que la **documentación detallada** (esquemas de Body, ejemplos JSON y códigos de respuesta) se encuentra en la **Wiki** del repositorio, bajo la sección **"Servicios"**.
----
+* Backend (API): http://localhost:3000
 
-# Estructura del proyecto
+El frontend está configurado (vía vite.config.js) para usar un proxy. Todas las peticiones fetch('/api/...') desde React son redirigidas automáticamente al servicio http://backend:3000 dentro de la red de Docker.
+ 
+
+## Estructura del proyecto
 El proyecto está organizado en dos módulos principales: backend y frontend, además de archivos de configuración en la raíz del repositorio.
-```
+```bash 
 Proyecto/
-├── backend/                 # ⚙️ Lógica del servidor (API REST, conexión a la BD, rutas)
+├── backend/                 # ⚙️ Lógica del servidor (API REST)
 │   ├── Dockerfile           # 🐳 Imagen Docker del backend
-│   ├── db.js                # 💾 Configuración de la base de datos
-│   ├── index.js             # 🚀 Punto de entrada del servidor
-│   ├── loans.routes.js      # 🛣️ Rutas de la API
-│   ├── package.json         # 📦 Dependencias del backend
-│   └── ...
+│   ├── db.js                # 💾 Configuración de la base de datos (pool de PG)
+│   ├── index.js             # 🚀 Punto de entrada del servidor (Express)
+│   ├── loans.routes.js      # 🛣️ Rutas de la API (/apply, /register, /login, /dashboard)
+│   ├── auth.js              # 🔑 Lógica de autenticación (JWT, bcrypt, middleware)
+│   ├── scoring.js           # 📊 Lógica de negocio (cálculo de puntaje)
+│   ├── validaciones.js      # ✅ Funciones de validación (RUT, teléfono)
+│   └── package.json
 │
-├── frontend/                # 🎨 Interfaz de usuario (cliente web)
-│   ├── public/              # 🖼️ Archivos estáticos (favicon, imágenes, etc.)
-│   ├── src/                 # 🧩 Código fuente del frontend (componentes, vistas, etc.)
+├── frontend/                # 🎨 Interfaz de usuario (Vite + React)
+│   ├── src/                 # 🧩 Código fuente del frontend
+│   │   ├── components/
+│   │   │   └── ProtectedRoute.jsx # 🛡️ Guardia de rutas (protege /dashboard)
+│   │   ├── context/
+│   │   │   └── AuthContext.jsx    # 🧠 Estado global (manejo de token/usuario)
+│   │   ├── pages/
+│   │   │   ├── Landing.jsx      # 🏠 Página de inicio (portada)
+│   │   │   ├── LoginPage.jsx      # 🚪 Página de inicio de sesión
+│   │   │   ├── RegisterPage.jsx   # 📝 Página de registro
+│   │   │   └── DashboardPage.jsx  # 📈 Dashboard (ruta protegida)
+│   │   ├── App.jsx            # 🗺️ Router principal (React Router DOM)
+│   │   └── main.jsx           # 🏁 Punto de entrada (Renderiza App y Providers)
 │   ├── Dockerfile           # 🐳 Imagen Docker del frontend
-│   ├── index.html           # 🌐 Página principal
-│   ├── package.json         # 📦 Dependencias del frontend
-│   └── ...
+│   ├── vite.config.js       # 🔄 Configuración de Vite (incluye proxy /api)
+│   └── package.json
 │
-├── docker-compose.yml       # 🔧 Orquestador de contenedores (backend + frontend)
-└── readme.md                # 📝 Documentación del proyecto
+├── docker-compose.yml       # 🔧 Orquestador (backend + frontend + db)
+└── readme.md                # 📝 Esta documentación
 ```
+
+## Servicios (API Endpoints)
+
+La API expone varios endpoints bajo el prefijo /loans.
+
+Autenticación:
+* POST /loans/register: Crea un nuevo usuario. Requiere rut, full_name, email, password. Devuelve un token JWT y datos del usuario.
+* POST /loans/login: Autentica un usuario (rut, password) y devuelve un token JWT y datos del usuario.
+
+Préstamos
+* POST /loans/apply: Envía una nueva solicitud de préstamo (público).
+* GET /loans/:id/status: Consulta el estado de una solicitud (público).
+* GET /loans/dashboard: (Protegido) Devuelve los datos del dashboard del usuario autenticado (requiere token Bearer).
+* GET /loans/health: Verifica que la API esté funcionando.
