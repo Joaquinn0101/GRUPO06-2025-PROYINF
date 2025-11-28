@@ -15,6 +15,6 @@ Puede acceder a la Wiki dando click en el siguiente enlace: [Disponible aquí](h
 
 ## Avances del Hito en el TAG:
 
-Avances disponibles en el tag correspondiente: [TAG 4](https://github.com/Joaquinn0101/GRUPO06-2025-PROYINF/releases/tag/hito-4)
+Avances disponibles en el tag correspondiente: [TAG 5](https://github.com/Joaquinn0101/GRUPO06-2025-PROYINF/releases/tag/hito-5)
 ## Videos
 * [Video Prototipo](https://youtu.be/JRR3ILT161Y)
