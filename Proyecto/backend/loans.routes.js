@@ -434,5 +434,31 @@ router.post("/:id/payments", authenticateToken, async (req, res) => {
     }
 });
 
+router.patch("/:id/sign", authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rut } = req.user; // Obtenemos el RUT del token para seguridad
+
+        // Solo actualizamos si el préstamo pertenece al usuario y está 'aprobada'
+        const { rows } = await pool.query(
+            `UPDATE loan_requests 
+             SET status = 'cursada' 
+             WHERE id = $1 AND rut = $2 AND status = 'aprobada'
+             RETURNING *`,
+            [id, rut]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: "Préstamo no encontrado o no apto para firma." });
+        }
+
+        res.json({ message: "Contrato firmado exitosamente.", loan: rows[0] });
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: "Error al firmar contrato." });
+    }
+});
+
 
 module.exports = router;
