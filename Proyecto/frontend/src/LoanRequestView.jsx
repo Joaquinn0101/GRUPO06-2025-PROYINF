@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
 import { motion } from "framer-motion";
+import { useNavigate, Link } from "react-router-dom";
+import { useAuth } from "./context/AuthContext";
 import {
     CheckCircle2,
     Circle,
@@ -8,12 +10,13 @@ import {
     ArrowLeft,
     FileSignature,
     CalendarClock,
+    UserPlus,
+    LayoutDashboard // <--- Nuevo ícono para el dashboard
 } from "lucide-react";
 
 // ——— Utilidades ———
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
-/** ===== Helpers de formato/validación (frontend) ===== */
 function cleanRut(v = "") {
     return v.replace(/[.\-\s]/g, "").toUpperCase();
 }
@@ -61,7 +64,6 @@ function validatePhoneCL(v = "") {
     return /^\+?569\s?[0-9]{8}$/.test(s);
 }
 
-/** ===== Cálculos ===== */
 function estimateMonthlyPayment(capital, meses, tasaMensual = 0.019) {
     if (!capital || !meses) return 0;
     if (tasaMensual === 0) return Math.round(capital / meses);
@@ -69,15 +71,6 @@ function estimateMonthlyPayment(capital, meses, tasaMensual = 0.019) {
     const cuota = (capital * r) / (1 - Math.pow(1 + r, -meses));
     return Math.round(cuota);
 }
-function computeScore(ingreso, monto, term) {
-    const safeTerm = term || 24;
-    if (!monto || ingreso < 0) return 1;
-    const base = 60 + ingreso / (monto / safeTerm);
-    return clamp(Math.round(base), 1, 100);
-}
-
-// ——— API Base ———
-const API = import.meta.env?.VITE_API_BASE_URL || "http://localhost:3000";
 
 // ——— UI helpers ———
 const Field = ({ label, required, children }) => (
@@ -92,31 +85,21 @@ const Card = ({ children, className = "" }) => (
     <div className={`rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur ${className}`}>{children}</div>
 );
 
-// ——— Tests mínimos (solo dev) ———
-(function __devTests() {
-    try {
-        if (import.meta?.env?.MODE !== "production") {
-            console.groupCollapsed("[Loan UI] self-tests");
-            console.assert(estimateMonthlyPayment(1500000, 24, 0) === 62500, "EMP r=0 => 62500");
-            const s1 = computeScore(1_000_000, 1_500_000, 24);
-            console.assert(s1 === 76, `Score esperado 76, got ${s1}`);
-            console.assert(validatePhoneCL("+569 12345678"), "Teléfono válido");
-            console.groupEnd();
-        }
-    } catch { /* noop */ }
-})();
-
 // ——— Vista principal ———
 export default function LoanRequestView() {
+    const navigate = useNavigate();
+    const { token, user } = useAuth(); // <--- 2. Obtenemos el estado de autenticación
+    
     const [step, setStep] = useState(1);
     const [submitting, setSubmitting] = useState(false);
     const [createdId, setCreatedId] = useState(null);
     const [status, setStatus] = useState(null);
     const [score, setScore] = useState(null);
 
+    // Pre-llenar datos si el usuario ya está logueado (Opcional, pero buena UX)
     const [data, setData] = useState({
-        rut: "",
-        fullName: "",
+        rut: user?.rut ? formatRut(user.rut) : "", // Si hay usuario, usamos su RUT
+        fullName: user?.name || "",
         email: "",
         phone: "",
         income: "",
@@ -142,14 +125,14 @@ export default function LoanRequestView() {
     }, [data.amount, data.term]);
 
     async function createLoan(payload) {
-        const res = await fetch(`${API}/loans/apply`, {
+        const res = await fetch(`/api/loans/apply`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 rut: payload.rut,
                 full_name: payload.fullName,
                 email: payload.email,
-                phone: payload.phone,               // <-- enviar teléfono
+                phone: payload.phone,
                 amount: payload.amount,
                 term_months: payload.term,
                 income: payload.income ?? undefined,
@@ -163,7 +146,7 @@ export default function LoanRequestView() {
         setSubmitting(true);
         try {
             const payload = {
-                rut: data.rut.trim(),
+                rut: cleanRut(data.rut), 
                 fullName: data.fullName.trim(),
                 email: data.email.trim(),
                 phone: data.phone.trim(),
@@ -177,6 +160,7 @@ export default function LoanRequestView() {
             setScore(applied.scoring ?? null);
         } catch (e) {
             console.error(e);
+            alert("Error al enviar solicitud. Revisa los datos.");
         } finally {
             setSubmitting(false);
         }
@@ -187,21 +171,21 @@ export default function LoanRequestView() {
             {/* Header */}
             <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/70 backdrop-blur">
                 <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-                    <div className="flex items-center gap-2">
+                    <Link to="/" className="flex items-center gap-2 hover:opacity-80">
                         <div className="h-8 w-8 rounded-xl bg-gradient-to-tr from-blue-400 via-indigo-500 to-emerald-400" />
                         <span className="text-sm font-semibold tracking-tight">Préstamo de Consumo</span>
-                    </div>
+                    </Link>
                     <nav className="hidden gap-6 md:flex">
-                        <a href="#form" className="text-sm text-zinc-300 hover:text-white">Solicitud</a>
-                        <a href="#estado" className="text-sm text-zinc-300 hover:text-white">Estado</a>
+                        <Link to="/" className="text-sm text-zinc-300 hover:text-white">Inicio</Link>
+                        {/* Ocultamos Login si ya hay token */}
+                        {!token && <Link to="/login" className="text-sm text-zinc-300 hover:text-white">Login</Link>}
                     </nav>
                 </div>
             </header>
 
             {/* Formulario */}
-            <section id="form" className="mx-auto max-w-6xl px-4 pb-16">
+            <section id="form" className="mx-auto max-w-6xl px-4 py-10 pb-16">
                 <div className="grid items-start gap-6 md:grid-cols-5">
-                    {/* Columna izquierda: formulario */}
                     <div className="md:col-span-3">
                         <Card>
                             <div className="flex items-center justify-between">
@@ -221,11 +205,13 @@ export default function LoanRequestView() {
                                     <div className="grid gap-4 sm:grid-cols-2">
                                         <Field label="RUT" required>
                                             <input
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none"
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                                                 value={data.rut}
                                                 inputMode="text"
                                                 placeholder="12.345.678-5"
                                                 onChange={(e) => setData({ ...data, rut: formatRut(e.target.value) })}
+                                                // Si el usuario está logueado, podríamos bloquear el RUT para que coincida con su cuenta
+                                                // readOnly={!!token} 
                                             />
                                             {!validateRut(data.rut) && data.rut && (
                                                 <p className="mt-1 text-xs text-amber-300">RUT inválido (usa formato 12.345.678-5).</p>
@@ -233,14 +219,14 @@ export default function LoanRequestView() {
                                         </Field>
                                         <Field label="Nombre completo" required>
                                             <input
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none"
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                                                 value={data.fullName}
                                                 onChange={(e) => setData({ ...data, fullName: e.target.value })}
                                             />
                                         </Field>
                                         <Field label="Email" required>
                                             <input
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none"
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                                                 value={data.email}
                                                 inputMode="email"
                                                 placeholder="tucorreo@dominio.cl"
@@ -249,7 +235,7 @@ export default function LoanRequestView() {
                                         </Field>
                                         <Field label="Teléfono" required>
                                             <input
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none"
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                                                 value={data.phone}
                                                 inputMode="tel"
                                                 placeholder="+569 12345678"
@@ -263,7 +249,7 @@ export default function LoanRequestView() {
                                         <Field label="Ingreso mensual (CLP)" required>
                                             <input
                                                 type="number" min={0}
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none"
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                                                 value={data.income}
                                                 onChange={(e) => setData({ ...data, income: e.target.value })}
                                             />
@@ -288,7 +274,7 @@ export default function LoanRequestView() {
                                         <Field label="Monto solicitado (CLP)" required>
                                             <input
                                                 type="number" min={0}
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none"
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                                                 value={data.amount}
                                                 onChange={(e) => setData({ ...data, amount: e.target.value })}
                                             />
@@ -296,7 +282,7 @@ export default function LoanRequestView() {
                                         <Field label="Plazo (meses)" required>
                                             <input
                                                 type="number" min={1}
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none"
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                                                 value={data.term}
                                                 onChange={(e) => setData({ ...data, term: e.target.value })}
                                             />
@@ -337,30 +323,36 @@ export default function LoanRequestView() {
 
                             {/* Navegación */}
                             <div className="mt-6 flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                <button
-                                    disabled={step === 1}
-                                    onClick={() => setStep((s) => (s > 1 ? s - 1 : s))}
-                                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-40"
-                                >
-                                    <ArrowLeft className="h-4 w-4" /> Atrás
-                                </button>
+                                {!createdId && (
+                                    <button
+                                        disabled={step === 1}
+                                        onClick={() => setStep((s) => (s > 1 ? s - 1 : s))}
+                                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-40 hover:bg-white/10"
+                                    >
+                                        <ArrowLeft className="h-4 w-4" /> Atrás
+                                    </button>
+                                )}
 
                                 {step < 3 ? (
                                     <button
                                         disabled={(step === 1 && (!canNext1 || !data.accept)) || (step === 2 && !canNext2)}
                                         onClick={() => setStep((s) => (s < 3 ? s + 1 : s))}
-                                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-2 text-sm font-semibold text-zinc-900 disabled:opacity-40"
+                                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-2 text-sm font-semibold text-zinc-900 disabled:opacity-40 hover:bg-zinc-200"
                                     >
                                         Siguiente <ArrowRight className="h-4 w-4" />
                                     </button>
-                                ) : (
+                                ) : !createdId ? (
                                     <button
                                         disabled={!data.accept || submitting}
                                         onClick={handleSubmitReal}
-                                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-2 text-sm font-semibold text-zinc-900 disabled:opacity-40"
+                                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-2 text-sm font-semibold text-zinc-900 disabled:opacity-40 hover:bg-zinc-200"
                                     >
                                         {submitting ? "Enviando…" : "Enviar solicitud"}
                                     </button>
+                                ) : (
+                                    <div className="text-emerald-400 text-sm font-medium animate-pulse">
+                                        ¡Solicitud enviada exitosamente!
+                                    </div>
                                 )}
                             </div>
                         </Card>
@@ -400,13 +392,43 @@ export default function LoanRequestView() {
                                 )}
                             </div>
 
-                            {status === "aprobada" && (
-                                <div className="mt-4 flex items-center justify-between rounded-xl bg-emerald-500/10 p-3">
-                                    <div className="flex items-center gap-2 text-sm text-emerald-300">
-                                        <FileSignature className="h-4 w-4" /> Firma digital habilitada
-                                    </div>
-                                    <button className="rounded-lg bg-white px-3 py-1 text-sm font-semibold text-zinc-900">Ir a firma</button>
-                                </div>
+                            {/* --- 4. LÓGICA DE BOTONES: SI HAY TOKEN VS NO HAY TOKEN --- */}
+                            {createdId && (
+                                <motion.div 
+                                    initial={{ opacity: 0, scale: 0.95 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    className="mt-6 p-4 rounded-xl bg-indigo-500/20 border border-indigo-500/30 text-center"
+                                >
+                                    {token ? (
+                                        /* CASO: USUARIO LOGUEADO */
+                                        <>
+                                            <p className="text-sm text-indigo-200 mb-3">
+                                                Solicitud guardada. Revisa el detalle en tu panel.
+                                            </p>
+                                            <button 
+                                                onClick={() => navigate('/dashboard')}
+                                                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors"
+                                            >
+                                                <LayoutDashboard className="h-4 w-4" />
+                                                Ir a mi Dashboard
+                                            </button>
+                                        </>
+                                    ) : (
+                                        /* CASO: USUARIO NO LOGUEADO */
+                                        <>
+                                            <p className="text-sm text-indigo-200 mb-3">
+                                                Para hacer seguimiento a esta solicitud, crea tu cuenta ahora.
+                                            </p>
+                                            <button 
+                                                onClick={() => navigate('/register')}
+                                                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors"
+                                            >
+                                                <UserPlus className="h-4 w-4" />
+                                                Crear Cuenta
+                                            </button>
+                                        </>
+                                    )}
+                                </motion.div>
                             )}
                         </Card>
                     </div>
