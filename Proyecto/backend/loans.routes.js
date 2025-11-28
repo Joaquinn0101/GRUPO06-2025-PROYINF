@@ -28,28 +28,28 @@ function normalizarTelefonoCL(input = "") {
 }
 
 const normalizeRut = (rut = "") => {
-    if (!rut || typeof rut !== 'string') return "";
-    return rut.replace(/[\.\-\s]/g, '').toUpperCase();
-}
+    if (!rut || typeof rut !== "string") return "";
+    return rut.replace(/[\.\-\s]/g, "").toUpperCase();
+};
 
 /* =============== Esquemas de validación request =============== */
 // Esquemas NUEVOS para Registro/Login
 const RegisterSchema = z.object({
-    rut: z.string().min(3)
-        // 1. Transformamos (limpiamos) el RUT apenas llega
-        .transform(normalizeRut) 
-        // 2. Validamos el RUT ya limpio
+    rut: z
+        .string()
+        .min(3)
+        .transform(normalizeRut)
         .refine((v) => validarRut(v), { message: "RUT inválido" }),
     full_name: z.string().min(3, "Nombre requerido"),
     email: z.string().email("Email inválido"),
-    password: z.string().min(6, "La clave debe tener al menos 6 caracteres."), 
+    password: z.string().min(6, "La clave debe tener al menos 6 caracteres."),
 });
 
 const LoginSchema = z.object({
-    // --- AÑADE ESTA CORRECCIÓN ---
-    rut: z.string().min(3, "RUT requerido")
-        .transform(normalizeRut), // Limpia el RUT antes de usarlo
-    
+    rut: z
+        .string()
+        .min(3, "RUT requerido")
+        .transform(normalizeRut),
     password: z.string().min(1, "Clave requerida"),
 });
 
@@ -70,52 +70,76 @@ const ApplySchema = z.object({
     income: z.number().int().nonnegative().optional(),
 });
 
-
-/* =============== DDL: asegurar tablas (CON TABLA USERS) =============== */
+/* =============== DDL: asegurar tablas =============== */
 async function ensureTables() {
     // 1. Tabla loan_requests (Préstamos)
     await pool.query(`
         CREATE TABLE IF NOT EXISTS loan_requests (
-            id SERIAL PRIMARY KEY,
-            rut TEXT NOT NULL,
-            full_name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            phone TEXT,
-            amount INTEGER NOT NULL,
-            term_months INTEGER NOT NULL,
-            income INTEGER,
-            status TEXT NOT NULL DEFAULT 'pendiente',
-            scoring INTEGER,
-            created_at TIMESTAMP NOT NULL DEFAULT NOW()
-        );
+                                                     id SERIAL PRIMARY KEY,
+                                                     rut TEXT NOT NULL,
+                                                     full_name TEXT NOT NULL,
+                                                     email TEXT NOT NULL,
+                                                     phone TEXT,
+                                                     amount INTEGER NOT NULL,
+                                                     term_months INTEGER NOT NULL,
+                                                     income INTEGER,
+                                                     status TEXT NOT NULL DEFAULT 'pendiente',
+                                                     scoring INTEGER,
+                                                     created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            );
     `);
 
-    // 2. NUEVA TABLA: USERS (ID, EMAIL, CONTRASEÑA CIFRADA)
+    // 2. Tabla USERS
     await pool.query(`
         CREATE TABLE IF NOT EXISTS users (
-            user_id SERIAL PRIMARY KEY,
-            rut VARCHAR(12) UNIQUE NOT NULL,
+                                             user_id SERIAL PRIMARY KEY,
+                                             rut VARCHAR(12) UNIQUE NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             full_name TEXT NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT NOW()
-        );
+            );
         CREATE INDEX IF NOT EXISTS idx_users_rut ON users(rut);
     `);
 
-    // Columna phone por si viene de antes sin ella
+    // Columna phone
     await pool.query(`ALTER TABLE loan_requests ADD COLUMN IF NOT EXISTS phone TEXT;`);
 
-    // Constraint
+    // 🔹 NUEVO: columna de saldo pendiente
+    await pool.query(`
+        ALTER TABLE loan_requests 
+        ADD COLUMN IF NOT EXISTS remaining_balance INTEGER;
+    `);
+
+    // 🔹 NUEVO: tabla de pagos
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS payments (
+            id SERIAL PRIMARY KEY,
+            loan_id INTEGER NOT NULL REFERENCES loan_requests(id) ON DELETE CASCADE,
+            amount INTEGER NOT NULL,
+            method TEXT,
+            paid_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    // 🔹 Inicializar remaining_balance en préstamos antiguos
+    await pool.query(`
+        UPDATE loan_requests
+        SET remaining_balance = amount
+        WHERE remaining_balance IS NULL;
+    `);
+
+    // Constraint teléfono
     try {
         await pool.query(`
             ALTER TABLE loan_requests
                 ADD CONSTRAINT chk_phone_cl
                     CHECK (phone IS NULL OR phone ~ '^\\+?569 ?[0-9]{8}$');
         `);
-    } catch (_) { /* ya existe */ }
+    } catch (_) {
+        // ya existe
+    }
 }
-
 
 /* =============== RUTAS DE AUTENTICACIÓN (HU 5) =============== */
 
@@ -129,31 +153,27 @@ router.post("/register", async (req, res) => {
         const passwordHash = await hashPassword(password);
 
         const { rows } = await pool.query(
-            `INSERT INTO users (rut, email, password_hash, full_name) 
-             VALUES ($1, $2, $3, $4) RETURNING user_id, rut, full_name, email`, // Pedimos que devuelva más datos
+            `INSERT INTO users (rut, email, password_hash, full_name)
+             VALUES ($1, $2, $3, $4)
+                 RETURNING user_id, rut, full_name, email`,
             [rut, email, passwordHash, full_name]
         );
 
         const user = rows[0];
         const token = generateToken(user.user_id, user.rut);
 
-        // --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
-        // Ahora devolvemos toda la info que el frontend necesita para el auth.login()
-        res.status(201).json({ 
-            token, 
-            user_id: user.user_id, 
-            full_name: user.full_name, // <-- Añadido
-            rut: user.rut,             // <-- Añadido
-            message: "Registro exitoso." 
+        res.status(201).json({
+            token,
+            user_id: user.user_id,
+            full_name: user.full_name,
+            rut: user.rut,
+            message: "Registro exitoso.",
         });
-
     } catch (e) {
-        if (e.code === '23505') { 
+        if (e.code === "23505") {
             return res.status(409).json({ error: "El RUT o Email ya se encuentra registrado." });
         }
         if (e.issues) {
-            // ¡Esta es la corrección para el "RUT INVÁLIDO"!
-            // Manda un mensaje de error claro en lugar de solo "validation_error"
             const firstError = e.issues[0]?.message || "Datos inválidos.";
             return res.status(400).json({ error: firstError });
         }
@@ -163,53 +183,42 @@ router.post("/register", async (req, res) => {
 });
 
 // POST /loans/login
-// POST /loans/login
 router.post("/login", async (req, res) => {
     try {
         const parsed = LoginSchema.parse(req.body);
-        const { rut, password } = parsed; // 'rut' aquí ya vendrá limpio
+        const { rut, password } = parsed;
 
-        // 1. Buscar usuario
         const { rows } = await pool.query(`SELECT * FROM users WHERE rut = $1`, [rut]);
-        
-        // --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
-        const user = rows[0]; // Definimos 'user' desde la respuesta
+        const user = rows[0];
 
-        // 2. Primero, verificar si el usuario EXISTE
         if (!user) {
-            // Si 'user' es undefined, devolvemos el error
             return res.status(401).json({ error: "RUT o clave inválida." });
         }
 
-        // 3. SI EXISTE, comparar la clave
         const isPasswordValid = await comparePassword(password, user.password_hash);
-
         if (!isPasswordValid) {
             return res.status(401).json({ error: "RUT o clave inválida." });
         }
 
-        // 4. Si todo es válido, generar token
         const token = generateToken(user.user_id, user.rut);
 
-        // Devolvemos los mismos datos que en el registro
-        res.json({ 
-            token, 
-            user_id: user.user_id, 
+        res.json({
+            token,
+            user_id: user.user_id,
             full_name: user.full_name,
-            rut: user.rut
+            rut: user.rut,
         });
-
     } catch (e) {
         if (e.issues) {
             const firstError = e.issues[0]?.message || "Datos inválidos.";
             return res.status(400).json({ error: firstError });
         }
-        console.error("Error en POST /login:", e); // Log de error
+        console.error("Error en POST /login:", e);
         res.status(500).json({ error: "login_failed" });
     }
 });
 
-/* =============== Rutas bajo /loans (Existente) =============== */
+/* =============== Rutas bajo /loans =============== */
 
 // Salud del router
 router.get("/health", (_req, res) => res.json({ ok: true, scope: "loans" }));
@@ -217,9 +226,8 @@ router.get("/health", (_req, res) => res.json({ ok: true, scope: "loans" }));
 // POST /loans/apply → inserta, calcula scoring y devuelve {id,status,scoring}
 router.post("/apply", async (req, res) => {
     try {
-        await ensureTables(); 
+        await ensureTables();
 
-        // 1) Validar body
         const parsed = ApplySchema.parse({
             rut: req.body?.rut,
             full_name: req.body?.full_name,
@@ -232,34 +240,37 @@ router.post("/apply", async (req, res) => {
 
         const { rut, full_name, email, phone, amount, term_months, income } = parsed;
 
-        // 2) Insertar como pendiente
+        // Insertar como pendiente (incluyendo remaining_balance)
         const insertQ = `
-            INSERT INTO loan_requests (rut, full_name, email, phone, amount, term_months, income, status)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,'pendiente')
+            INSERT INTO loan_requests
+            (rut, full_name, email, phone, amount, term_months, income, status, remaining_balance)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,'pendiente',$5)
                 RETURNING *;
         `;
         const { rows: insertedRows } = await pool.query(insertQ, [
-            rut, full_name, email, phone ?? null, amount, term_months, income ?? null,
+            rut,
+            full_name,
+            email,
+            phone ?? null,
+            amount,
+            term_months,
+            income ?? null,
         ]);
         const reqRow = insertedRows[0];
 
-        // 3) Calcular scoring inmediato (usa scoring.js)
         const ingreso = income ?? 0;
-        const score = calcularScoring(ingreso, amount, term_months); // entero [1..100]
+        const score = calcularScoring(ingreso, amount, term_months);
 
-        // 4) Reglas de decisión (mock): >= 60 aprueba, < 60 rechaza
         const finalStatus = score >= 60 ? "aprobada" : "rechazada";
 
-        // 5) Persistir status + scoring
         const updateQ = `
             UPDATE loan_requests
             SET status = $2, scoring = $3
             WHERE id = $1
-                RETURNING id, status, scoring;
+            RETURNING id, status, scoring;
         `;
         const { rows: updatedRows } = await pool.query(updateQ, [reqRow.id, finalStatus, score]);
 
-        // 6) Responder lo que tu frontend espera
         return res.status(201).json({
             id: updatedRows[0].id,
             status: updatedRows[0].status,
@@ -273,7 +284,6 @@ router.post("/apply", async (req, res) => {
         return res.status(500).json({ error: "apply_failed" });
     }
 });
-
 
 // GET /loans/:id/status → consulta rápida para polling si lo usas
 router.get("/:id/status", async (req, res) => {
@@ -290,41 +300,139 @@ router.get("/:id/status", async (req, res) => {
     }
 });
 
-// --- NUEVA RUTA PROTEGIDA: GET /loans/dashboard ---
+// --- RUTA PROTEGIDA: GET /loans/dashboard ---
 router.get("/dashboard", authenticateToken, async (req, res) => {
     try {
-        // req.user fue establecido por authenticateToken y contiene { user_id, rut }
+        await ensureTables();
+
         const { rut } = req.user;
 
-        // 1. Obtener solicitudes del usuario (HU 4)
         const { rows: loanRequests } = await pool.query(
-            `SELECT id, amount, term_months, status, created_at, scoring 
-             FROM loan_requests 
-             WHERE rut = $1 
+            `SELECT id, amount, term_months, status, created_at, scoring, remaining_balance
+             FROM loan_requests
+             WHERE rut = $1
              ORDER BY created_at DESC`,
             [rut]
         );
 
-        // 2. Mock de cuotas pendientes (Integración HU 3 - Pagos)
-        // Esto asume una cuota simple si el préstamo está 'aprobada'.
-        const pendingPayments = loanRequests.filter(r => r.status === 'aprobada').map(r => ({
-            loan_id: r.id,
-            amount: r.amount / r.term_months, // Cuota simplificada (Monto / Plazo)
-            due_date: new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString().split('T')[0]
-        }));
-
+        const pendingPayments = loanRequests
+            .filter((r) => r.status === "aprobada" && r.remaining_balance > 0)
+            .map((r) => ({
+                loan_id: r.id,
+                amount: Math.round(r.amount / r.term_months),
+                due_date: new Date(
+                    new Date().setMonth(new Date().getMonth() + 1)
+                )
+                    .toISOString()
+                    .split("T")[0],
+            }));
 
         res.json({
             rut,
             latest_status: loanRequests[0]?.status || "No hay solicitudes",
             loan_requests: loanRequests,
             pending_payments: pendingPayments,
-            message: "Acceso autorizado al dashboard."
+            message: "Acceso autorizado al dashboard.",
         });
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: "dashboard_failed" });
     }
 });
+
+// 🔹 GET /loans/:id → detalle de un préstamo (para el portal de pagos)
+// 🔹 GET /loans/:id → detalle de un préstamo (para el portal de pagos)
+router.get("/:id", authenticateToken, async (req, res) => {
+    try {
+        await ensureTables();
+
+        const loanId = Number(req.params.id);
+
+        if (Number.isNaN(loanId)) {
+            return res.status(400).json({ error: "id_invalido" });
+        }
+
+        // 🔥 Arreglo: buscamos solo por id (simplificado para el ramo)
+        const { rows } = await pool.query(
+            `SELECT id, rut, full_name, amount, term_months, status, scoring, created_at, remaining_balance
+             FROM loan_requests
+             WHERE id = $1`,
+            [loanId]
+        );
+
+        if (!rows.length) {
+            return res.status(404).json({ error: "not_found" });
+        }
+
+        return res.json(rows[0]);
+    } catch (e) {
+        console.error("Error en GET /loans/:id", e);
+        return res.status(500).json({ error: "internal_error" });
+    }
+});
+
+
+// 🔹 POST /loans/:id/payments → registrar un pago (simulado)
+router.post("/:id/payments", authenticateToken, async (req, res) => {
+    try {
+        await ensureTables();
+
+        const loanId = Number(req.params.id);
+        const { amount, method } = req.body;
+
+        if (Number.isNaN(loanId)) {
+            return res.status(400).json({ message: "ID de préstamo inválido." });
+        }
+
+        const pago = Number(amount);
+        if (!pago || pago <= 0) {
+            return res.status(400).json({ message: "Monto inválido." });
+        }
+
+        // 🔥 Arreglo: buscamos solo por id
+        const { rows: loanRows } = await pool.query(
+            `SELECT id, rut, amount, term_months, status, remaining_balance
+             FROM loan_requests
+             WHERE id = $1`,
+            [loanId]
+        );
+
+        const loan = loanRows[0];
+        if (!loan) {
+            return res.status(404).json({ message: "Crédito no encontrado." });
+        }
+
+        if (loan.remaining_balance <= 0) {
+            return res.status(400).json({ message: "El crédito ya está pagado." });
+        }
+
+        const { rows: paymentRows } = await pool.query(
+            `INSERT INTO payments (loan_id, amount, method)
+             VALUES ($1, $2, $3)
+                 RETURNING id, loan_id, amount, method, paid_at`,
+            [loan.id, pago, method || null]
+        );
+
+        const newBalance = Math.max(loan.remaining_balance - pago, 0);
+
+        const { rows: updatedLoanRows } = await pool.query(
+            `UPDATE loan_requests
+             SET remaining_balance = $1
+             WHERE id = $2
+                 RETURNING id, rut, full_name, amount, term_months, status, scoring, created_at, remaining_balance`,
+            [newBalance, loan.id]
+        );
+
+        return res.status(201).json({
+            message: "Pago registrado correctamente (simulado).",
+            loan: updatedLoanRows[0],
+            payment: paymentRows[0],
+        });
+    } catch (e) {
+        console.error("Error en POST /loans/:id/payments", e);
+        return res.status(500).json({ message: "Error procesando pago." });
+    }
+});
+
 
 module.exports = router;
