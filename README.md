@@ -18,3 +18,4 @@ Puede acceder a la Wiki dando click en el siguiente enlace: [Disponible aquí](h
 Resultados finales disponibles en el tag correspondiente: [TAG 5](https://github.com/Joaquinn0101/GRUPO06-2025-PROYINF/releases/tag/hito-5)
 ## Videos
 * [Video Prototipo](https://youtu.be/JRR3ILT161Y)
+* [Video Resultado Final](https://www.youtube.com/watch?v=xremdMxI9Yk)
