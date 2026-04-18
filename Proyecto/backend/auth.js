@@ -1,5 +1,5 @@
 // auth.js
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = 'TU_CLAVE_SUPER_SECRETA_Y_LARGA'; // Clave para firmar tokens

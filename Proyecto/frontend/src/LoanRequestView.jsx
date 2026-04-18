@@ -95,6 +95,11 @@ export default function LoanRequestView() {
     const [createdId, setCreatedId] = useState(null);
     const [status, setStatus] = useState(null);
     const [score, setScore] = useState(null);
+    
+    // Recomendación del sistema
+    const [recommendation, setRecommendation] = useState(null);
+    const [simulatedProb, setSimulatedProb] = useState(null);
+    const [loadingRec, setLoadingRec] = useState(false);
 
     // Pre-llenar datos si el usuario ya está logueado (Opcional, pero buena UX)
     const [data, setData] = useState({
@@ -103,6 +108,8 @@ export default function LoanRequestView() {
         email: "",
         phone: "",
         income: "",
+        seniority: "", // <-- NUEVO
+        existingDebt: "", // <-- NUEVO
         amount: "",
         term: "24",
         accept: false,
@@ -114,7 +121,9 @@ export default function LoanRequestView() {
             data.fullName.trim() &&
             /.+@.+\..+/.test(data.email) &&
             validatePhoneCL(data.phone) &&
-            Number(data.income) > 0
+            Number(data.income) > 0 &&
+            data.seniority !== "" &&
+            data.existingDebt !== ""
         );
     }, [data]);
 
@@ -123,6 +132,75 @@ export default function LoanRequestView() {
     const monthlyPayment = useMemo(() => {
         return estimateMonthlyPayment(Number(data.amount) || 0, Number(data.term) || 0, 0.019);
     }, [data.amount, data.term]);
+
+    // Obtener recomendación al pasar al paso 2
+    async function getRecommendation() {
+        setLoadingRec(true);
+        try {
+            const res = await fetch(`/api/loans/recommend`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    income: Number(data.income),
+                    seniority: Number(data.seniority),
+                    existing_debt: Number(data.existingDebt)
+                }),
+            });
+            if (res.ok) {
+                const rec = await res.json();
+                setRecommendation(rec);
+                setSimulatedProb(rec.probabilidad);
+                // Sugerimos los valores al usuario
+                setData(prev => ({
+                    ...prev,
+                    amount: rec.monto,
+                    term: rec.plazo
+                }));
+            }
+        } catch (e) {
+            console.error("Rec failed", e);
+        } finally {
+            setLoadingRec(false);
+        }
+    }
+
+    // Simular dinámicamente
+    async function simulate(amount, term) {
+        try {
+            const res = await fetch(`/api/loans/simulate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    income: Number(data.income),
+                    amount: Number(amount),
+                    term: Number(term),
+                    seniority: Number(data.seniority),
+                    existing_debt: Number(data.existingDebt)
+                }),
+            });
+            if (res.ok) {
+                const result = await res.json();
+                setSimulatedProb(result.probabilidad);
+            }
+        } catch (e) {
+            console.error("Simulation failed", e);
+        }
+    }
+
+    const handleStep1Next = () => {
+        getRecommendation();
+        setStep(2);
+    };
+
+    const handleAmountChange = (val) => {
+        setData({ ...data, amount: val });
+        simulate(val, data.term);
+    };
+
+    const handleTermChange = (val) => {
+        setData({ ...data, term: val });
+        simulate(data.amount, val);
+    };
 
     async function createLoan(payload) {
         const res = await fetch(`/api/loans/apply`, {
@@ -136,6 +214,8 @@ export default function LoanRequestView() {
                 amount: payload.amount,
                 term_months: payload.term,
                 income: payload.income ?? undefined,
+                seniority: payload.seniority ?? undefined,
+                existing_debt: payload.existing_debt ?? undefined,
             }),
         });
         if (!res.ok) throw new Error(`apply_failed_${res.status}`);
@@ -153,6 +233,8 @@ export default function LoanRequestView() {
                 amount: Number(data.amount),
                 term: Number(data.term),
                 income: Number(data.income),
+                seniority: Number(data.seniority),
+                existing_debt: Number(data.existingDebt),
             };
             const applied = await createLoan(payload);
             setCreatedId(String(applied.id));
@@ -210,8 +292,6 @@ export default function LoanRequestView() {
                                                 inputMode="text"
                                                 placeholder="12.345.678-5"
                                                 onChange={(e) => setData({ ...data, rut: formatRut(e.target.value) })}
-                                                // Si el usuario está logueado, podríamos bloquear el RUT para que coincida con su cuenta
-                                                // readOnly={!!token} 
                                             />
                                             {!validateRut(data.rut) && data.rut && (
                                                 <p className="mt-1 text-xs text-amber-300">RUT inválido (usa formato 12.345.678-5).</p>
@@ -242,9 +322,6 @@ export default function LoanRequestView() {
                                                 maxLength={14}
                                                 onChange={(e) => setData({ ...data, phone: normalizePhoneCL(e.target.value) })}
                                             />
-                                            {!validatePhoneCL(data.phone) && data.phone && (
-                                                <p className="mt-1 text-xs text-amber-300">Usa formato +569 12345678.</p>
-                                            )}
                                         </Field>
                                         <Field label="Ingreso mensual (CLP)" required>
                                             <input
@@ -252,6 +329,23 @@ export default function LoanRequestView() {
                                                 className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
                                                 value={data.income}
                                                 onChange={(e) => setData({ ...data, income: e.target.value })}
+                                            />
+                                        </Field>
+                                        <Field label="Antigüedad laboral (años)" required>
+                                            <input
+                                                type="number" min={0}
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+                                                value={data.seniority}
+                                                onChange={(e) => setData({ ...data, seniority: e.target.value })}
+                                            />
+                                        </Field>
+                                        <Field label="Deuda financiera mensual (CLP)" required>
+                                            <input
+                                                type="number" min={0}
+                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+                                                value={data.existingDebt}
+                                                placeholder="Suma de cuotas de otros créditos"
+                                                onChange={(e) => setData({ ...data, existingDebt: e.target.value })}
                                             />
                                         </Field>
                                     </div>
@@ -269,31 +363,93 @@ export default function LoanRequestView() {
 
                             {/* STEP 2 */}
                             {step === 2 && (
-                                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-5 space-y-4">
-                                    <div className="grid gap-4 sm:grid-cols-2">
-                                        <Field label="Monto solicitado (CLP)" required>
-                                            <input
-                                                type="number" min={0}
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                                                value={data.amount}
-                                                onChange={(e) => setData({ ...data, amount: e.target.value })}
-                                            />
-                                        </Field>
-                                        <Field label="Plazo (meses)" required>
-                                            <input
-                                                type="number" min={1}
-                                                className="w-full rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                                                value={data.term}
-                                                onChange={(e) => setData({ ...data, term: e.target.value })}
-                                            />
-                                        </Field>
-                                    </div>
-                                    <Card className="bg-white/10">
-                                        <div className="flex items-center gap-3 text-sm text-zinc-200">
-                                            <CalendarClock className="h-4 w-4" /> Estimación cuota mensual
+                                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-5 space-y-6">
+                                    {loadingRec && (
+                                        <div className="flex items-center justify-center py-10">
+                                            <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+                                            <span className="ml-3 text-sm text-zinc-400">Calculando tu oferta óptima...</span>
                                         </div>
-                                        <div className="mt-2 text-2xl font-semibold">${monthlyPayment.toLocaleString("es-CL")}</div>
-                                    </Card>
+                                    )}
+
+                                    {!loadingRec && recommendation && (
+                                        <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }}>
+                                            <Card className="bg-indigo-500/10 border-indigo-500/20">
+                                                <h4 className="text-sm font-semibold text-indigo-300 uppercase tracking-wider">Oferta Recomendada</h4>
+                                                <div className="mt-3 grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <p className="text-xs text-zinc-400">Monto sugerido</p>
+                                                        <p className="text-lg font-bold">${recommendation.monto.toLocaleString("es-CL")}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs text-zinc-400">Plazo sugerido</p>
+                                                        <p className="text-lg font-bold">{recommendation.plazo} meses</p>
+                                                    </div>
+                                                </div>
+                                                <button 
+                                                    onClick={() => {
+                                                        setData({...data, amount: recommendation.monto, term: recommendation.plazo});
+                                                        setSimulatedProb(recommendation.probabilidad);
+                                                    }}
+                                                    className="mt-4 w-full py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold transition-colors"
+                                                >
+                                                    USAR RECOMENDACIÓN
+                                                </button>
+                                            </Card>
+                                        </motion.div>
+                                    )}
+
+                                    <div className="space-y-6">
+                                        <div>
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-sm font-medium text-zinc-300">Monto solicitado</span>
+                                                <span className="text-lg font-bold text-white">${Number(data.amount).toLocaleString("es-CL")}</span>
+                                            </div>
+                                            <input 
+                                                type="range" min="500000" max="20000000" step="100000"
+                                                className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                                                value={data.amount}
+                                                onChange={(e) => handleAmountChange(e.target.value)}
+                                            />
+                                            <div className="flex justify-between text-[10px] text-zinc-500 mt-1">
+                                                <span>$500.000</span>
+                                                <span>$20.000.000</span>
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-sm font-medium text-zinc-300">Plazo</span>
+                                                <span className="text-lg font-bold text-white">{data.term} meses</span>
+                                            </div>
+                                            <input 
+                                                type="range" min="6" max="60" step="6"
+                                                className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                                                value={data.term}
+                                                onChange={(e) => handleTermChange(e.target.value)}
+                                            />
+                                            <div className="flex justify-between text-[10px] text-zinc-500 mt-1">
+                                                <span>6 meses</span>
+                                                <span>60 meses</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <Card className="bg-white/5 border-white/5">
+                                            <div className="flex items-center gap-2 text-xs text-zinc-400 mb-1">
+                                                <CalendarClock className="h-3 w-3" /> Cuota mensual
+                                            </div>
+                                            <div className="text-xl font-bold">${monthlyPayment.toLocaleString("es-CL")}</div>
+                                        </Card>
+                                        <Card className="bg-white/5 border-white/5">
+                                            <div className="flex items-center gap-2 text-xs text-zinc-400 mb-1">
+                                                <CheckCircle2 className="h-3 w-3" /> Probabilidad
+                                            </div>
+                                            <div className={`text-xl font-bold ${simulatedProb > 70 ? "text-emerald-400" : simulatedProb > 40 ? "text-amber-400" : "text-red-400"}`}>
+                                                {simulatedProb}%
+                                            </div>
+                                        </Card>
+                                    </div>
                                 </motion.div>
                             )}
 
@@ -301,16 +457,17 @@ export default function LoanRequestView() {
                             {step === 3 && (
                                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-5 space-y-4">
                                     <Card>
-                                        <h4 className="font-medium text-white">Revisión</h4>
+                                        <h4 className="font-medium text-white">Revisión Final</h4>
                                         <dl className="mt-3 grid grid-cols-2 gap-3 text-sm text-zinc-300">
-                                            <div><dt className="text-zinc-400">RUT</dt><dd>{data.rut || "—"}</dd></div>
                                             <div><dt className="text-zinc-400">Nombre</dt><dd>{data.fullName || "—"}</dd></div>
-                                            <div><dt className="text-zinc-400">Email</dt><dd>{data.email || "—"}</dd></div>
-                                            <div><dt className="text-zinc-400">Teléfono</dt><dd>{data.phone || "—"}</dd></div>
-                                            <div><dt className="text-zinc-400">Ingreso mensual</dt><dd>${Number(data.income || 0).toLocaleString("es-CL")}</dd></div>
-                                            <div><dt className="text-zinc-400">Monto solicitado</dt><dd>${Number(data.amount || 0).toLocaleString("es-CL")}</dd></div>
-                                            <div><dt className="text-zinc-400">Plazo</dt><dd>{data.term} meses</dd></div>
-                                            <div><dt className="text-zinc-400">Cuota estimada</dt><dd>${monthlyPayment.toLocaleString("es-CL")}</dd></div>
+                                            <div><dt className="text-zinc-400">Ingreso</dt><dd>${Number(data.income || 0).toLocaleString("es-CL")}</dd></div>
+                                            <div><dt className="text-zinc-400">Antigüedad</dt><dd>{data.seniority} años</dd></div>
+                                            <div><dt className="text-zinc-400">Deuda actual</dt><dd>${Number(data.existingDebt || 0).toLocaleString("es-CL")}</dd></div>
+                                            <div className="col-span-2 border-t border-white/5 pt-2 mt-1"></div>
+                                            <div><dt className="text-zinc-400">Monto</dt><dd className="text-white font-semibold">${Number(data.amount || 0).toLocaleString("es-CL")}</dd></div>
+                                            <div><dt className="text-zinc-400">Plazo</dt><dd className="text-white font-semibold">{data.term} meses</dd></div>
+                                            <div><dt className="text-zinc-400">Cuota</dt><dd className="text-white font-semibold">${monthlyPayment.toLocaleString("es-CL")}</dd></div>
+                                            <div><dt className="text-zinc-400">Probabilidad</dt><dd className="text-emerald-400 font-bold">{simulatedProb}%</dd></div>
                                         </dl>
                                     </Card>
                                     {!data.accept && (
@@ -333,13 +490,21 @@ export default function LoanRequestView() {
                                     </button>
                                 )}
 
-                                {step < 3 ? (
+                                {step === 1 ? (
                                     <button
-                                        disabled={(step === 1 && (!canNext1 || !data.accept)) || (step === 2 && !canNext2)}
-                                        onClick={() => setStep((s) => (s < 3 ? s + 1 : s))}
+                                        disabled={!canNext1 || !data.accept}
+                                        onClick={handleStep1Next}
                                         className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-2 text-sm font-semibold text-zinc-900 disabled:opacity-40 hover:bg-zinc-200"
                                     >
-                                        Siguiente <ArrowRight className="h-4 w-4" />
+                                        Ver recomendación <ArrowRight className="h-4 w-4" />
+                                    </button>
+                                ) : step === 2 ? (
+                                    <button
+                                        disabled={!canNext2}
+                                        onClick={() => setStep(3)}
+                                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-2 text-sm font-semibold text-zinc-900 disabled:opacity-40 hover:bg-zinc-200"
+                                    >
+                                        Revisar solicitud <ArrowRight className="h-4 w-4" />
                                     </button>
                                 ) : !createdId ? (
                                     <button

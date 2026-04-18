@@ -4,7 +4,7 @@ const { z } = require("zod");
 const pool = require("./db");
 
 // Lógica de negocio
-const { calcularScoring } = require("./scoring");
+const { calcularScoring, calcularProbabilidad, obtenerRecomendacion } = require("./scoring");
 const { validarRut, validarTelefonoChileno } = require("./validaciones");
 // IMPORTAR LÓGICA DE SEGURIDAD (auth.js)
 const { hashPassword, comparePassword, generateToken, authenticateToken } = require("./auth");
@@ -68,6 +68,8 @@ const ApplySchema = z.object({
     amount: z.number().int().positive("Monto > 0"),
     term_months: z.number().int().positive("Plazo > 0"),
     income: z.number().int().nonnegative().optional(),
+    seniority: z.number().int().nonnegative().optional(),
+    existing_debt: z.number().int().nonnegative().optional(),
 });
 
 /* =============== DDL: asegurar tablas =============== */
@@ -104,6 +106,8 @@ async function ensureTables() {
 
     // Columna phone
     await pool.query(`ALTER TABLE loan_requests ADD COLUMN IF NOT EXISTS phone TEXT;`);
+    await pool.query(`ALTER TABLE loan_requests ADD COLUMN IF NOT EXISTS seniority INTEGER DEFAULT 0;`);
+    await pool.query(`ALTER TABLE loan_requests ADD COLUMN IF NOT EXISTS existing_debt INTEGER DEFAULT 0;`);
 
     // 🔹 NUEVO: columna de saldo pendiente
     await pool.query(`
@@ -236,15 +240,17 @@ router.post("/apply", async (req, res) => {
             amount: Number(req.body?.amount),
             term_months: Number(req.body?.term_months),
             income: req.body?.income == null ? undefined : Number(req.body?.income),
+            seniority: req.body?.seniority == null ? undefined : Number(req.body?.seniority),
+            existing_debt: req.body?.existing_debt == null ? undefined : Number(req.body?.existing_debt),
         });
 
-        const { rut, full_name, email, phone, amount, term_months, income } = parsed;
+        const { rut, full_name, email, phone, amount, term_months, income, seniority, existing_debt } = parsed;
 
         // Insertar como pendiente (incluyendo remaining_balance)
         const insertQ = `
             INSERT INTO loan_requests
-            (rut, full_name, email, phone, amount, term_months, income, status, remaining_balance)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,'pendiente',$5)
+            (rut, full_name, email, phone, amount, term_months, income, seniority, existing_debt, status, remaining_balance)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pendiente',$5)
                 RETURNING *;
         `;
         const { rows: insertedRows } = await pool.query(insertQ, [
@@ -255,11 +261,13 @@ router.post("/apply", async (req, res) => {
             amount,
             term_months,
             income ?? null,
+            seniority ?? 0,
+            existing_debt ?? 0,
         ]);
         const reqRow = insertedRows[0];
 
         const ingreso = income ?? 0;
-        const score = calcularScoring(ingreso, amount, term_months);
+        const score = calcularScoring(ingreso, amount, term_months, seniority ?? 0, existing_debt ?? 0);
 
         const finalStatus = score >= 60 ? "aprobada" : "rechazada";
 
@@ -460,5 +468,40 @@ router.patch("/:id/sign", authenticateToken, async (req, res) => {
     }
 });
 
+
+// POST /loans/recommend → Sugiere monto y plazo óptimo
+router.post("/recommend", async (req, res) => {
+    try {
+        const { income, seniority, existing_debt } = req.body;
+        const recomendacion = obtenerRecomendacion(
+            Number(income || 0),
+            Number(seniority || 0),
+            Number(existing_debt || 0)
+        );
+        res.json(recomendacion);
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: "recommend_failed" });
+    }
+});
+
+// POST /loans/simulate → Recalcula probabilidad dinámicamente
+router.post("/simulate", async (req, res) => {
+    try {
+        const { income, amount, term, seniority, existing_debt } = req.body;
+        const score = calcularScoring(
+            Number(income || 0),
+            Number(amount || 0),
+            Number(term || 0),
+            Number(seniority || 0),
+            Number(existing_debt || 0)
+        );
+        const probabilidad = calcularProbabilidad(score);
+        res.json({ score, probabilidad });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: "simulate_failed" });
+    }
+});
 
 module.exports = router;
